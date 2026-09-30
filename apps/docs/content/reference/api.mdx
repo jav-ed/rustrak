@@ -29,6 +29,42 @@ Authorization: Bearer EXISTING_TOKEN
 { "description": "CI/CD Pipeline" }
 ```
 
+## Exact event lookup by user or request
+
+`GET /api/projects/{project_id}/events/lookup` finds matching events across
+issues in one project. It requires project Viewer access and exactly one selector:
+
+- `user_id`: exact string from the event's `user.id`.
+- `request_id`: exact string from the event's `tags["request.id"]`. Set this tag
+  in the SDK when capturing an event; nested `tags.request.id`, HTTP headers and
+  trace IDs are not substituted for it.
+
+Identifiers must contain 1–200 UTF-8 bytes without control characters or surrounding
+whitespace. Matching is case-sensitive. Missing, non-string and oversized stored
+identifiers remain ingestible but are not eligible for this lookup.
+
+```bash
+curl --get -H "Authorization: Bearer YOUR_TOKEN" \
+  --data-urlencode "user_id=customer-42" \
+  http://localhost:8080/api/projects/1/events/lookup
+```
+
+Responses use `{items, has_more, next_cursor?}` and contain at most 20 event
+summaries, newest first by `(timestamp, id)`, without full event JSON. Use the
+existing event-detail endpoint for a returned issue/event pair. Pass `next_cursor`
+with the same project and selector for the next page; reusing it for another
+search returns `400`. An accessible project with no matches returns an empty
+page. An inaccessible or nonexistent project returns `404`.
+
+When the SDK event ID is already known, use
+`GET /api/projects/{project_id}/events/sentry/{event_id}` instead.
+
+Two partial indexes support the identity lookups and add storage and event-write
+cost. SQLite builds them in its migration write transaction; allow a maintenance
+window on a large database. PostgreSQL builds each index concurrently in a
+separate migration. If an interrupted PostgreSQL build leaves an INVALID lookup
+index, inspect it and drop that failed index before retrying the migration.
+
 ## Self-hosted spec
 
 The server exposes the spec directly when built with the `openapi` feature:

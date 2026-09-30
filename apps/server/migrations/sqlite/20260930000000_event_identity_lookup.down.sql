@@ -1,0 +1,2 @@
+DROP INDEX idx_events_project_request_identity;
+DROP INDEX idx_events_project_user_identity;
