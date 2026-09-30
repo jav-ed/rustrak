@@ -149,7 +149,8 @@ const requests = await client.events.lookup(projectId, { request_id: 'request-12
 ```
 
 Supply exactly one selector. `user_id` reads `user.id`; `request_id` reads the
-`request.id` tag. Results contain at most 20 summaries, with `has_more` and an
+`request.id` tag in object, tuple-array or key/value-array tags. Results contain
+at most 20 summaries, with `has_more` and an
 optional `next_cursor` for the same project and selector. Identifiers are exact
 strings of 1–200 UTF-8 bytes without control or surrounding whitespace. Lookup
 failures use the same `Result` contract as the other methods.

@@ -16,7 +16,7 @@ pub(crate) enum LookupKind {
 
 impl LookupKind {
     fn sql_parts(self) -> (&'static str, &'static str) {
-        // Keep these predicates identical to the partial-index migrations.
+        // Match the user partial index and request-table byte-length constraint.
         // Non-string and oversized SDK values stay ingestible but unindexed.
         #[cfg(feature = "sqlite")]
         match self {
@@ -25,8 +25,8 @@ impl LookupKind {
                 "json_type(data, '$.user.id') = 'text' AND length(CAST(json_extract(data, '$.user.id') AS BLOB)) BETWEEN 1 AND 200",
             ),
             Self::Request => (
-                r#"json_extract(data, '$.tags."request.id"')"#,
-                r#"json_type(data, '$.tags."request.id"') = 'text' AND length(CAST(json_extract(data, '$.tags."request.id"') AS BLOB)) BETWEEN 1 AND 200"#,
+                "r.request_id",
+                "length(CAST(r.request_id AS BLOB)) BETWEEN 1 AND 200",
             ),
         }
         #[cfg(feature = "postgres")]
@@ -36,8 +36,8 @@ impl LookupKind {
                 "jsonb_typeof(data #> '{user,id}') = 'string' AND octet_length(data #>> '{user,id}') BETWEEN 1 AND 200",
             ),
             Self::Request => (
-                "(data #>> '{tags,request.id}')",
-                "jsonb_typeof(data #> '{tags,request.id}') = 'string' AND octet_length(data #>> '{tags,request.id}') BETWEEN 1 AND 200",
+                "r.request_id",
+                "octet_length(r.request_id) BETWEEN 1 AND 200",
             ),
         }
     }
@@ -52,17 +52,28 @@ pub(crate) async fn list(
     cursor: Option<&EventCursor>,
 ) -> AppResult<(Vec<EventSummary>, bool)> {
     let (field, predicate) = kind.sql_parts();
+    // The request table contains each distinct tag, including SDK array forms.
+    // Order by its covering index before fetching the matching event summaries.
+    let (source, project, timestamp, id) = match kind {
+        LookupKind::User => ("events e", "e.project_id", "e.timestamp", "e.id"),
+        LookupKind::Request => (
+            "event_request_identities r JOIN events e ON e.id = r.event_id",
+            "r.project_id",
+            "r.timestamp",
+            "r.event_id",
+        ),
+    };
     let boundary = if cursor.is_some() {
-        "AND (timestamp, id) < ($4, $5)"
+        format!("AND ({timestamp}, {id}) < ($4, $5)")
     } else {
-        ""
+        String::new()
     };
     // Only fixed SQL fragments are interpolated. All caller values are bound.
     let sql = format!(
-        "SELECT id, event_id, issue_id, timestamp, calculated_type, calculated_value, \
-         level, platform, release, environment, event_type FROM events \
-         WHERE project_id = $1 AND {field} = $2 AND {predicate} {boundary} \
-         ORDER BY timestamp DESC, id DESC LIMIT $3"
+        "SELECT e.id, e.event_id, e.issue_id, e.timestamp, e.calculated_type, e.calculated_value, \
+         e.level, e.platform, e.release, e.environment, e.event_type FROM {source} \
+         WHERE {project} = $1 AND {field} = $2 AND {predicate} {boundary} \
+         ORDER BY {timestamp} DESC, {id} DESC LIMIT $3"
     );
     let query = sqlx::query_as::<_, EventSummary>(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(project_id)

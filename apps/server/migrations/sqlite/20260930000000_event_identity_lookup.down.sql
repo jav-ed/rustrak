@@ -1,2 +1,5 @@
-DROP INDEX idx_events_project_request_identity;
+DROP TRIGGER events_request_identity_update;
+DROP TRIGGER events_request_identity_insert;
+DROP VIEW event_request_identity_values;
+DROP TABLE event_request_identities;
 DROP INDEX idx_events_project_user_identity;

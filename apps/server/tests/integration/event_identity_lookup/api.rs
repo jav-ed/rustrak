@@ -10,12 +10,17 @@ async fn both_selectors_page_across_issues_without_payloads_or_project_leaks() {
     let f = Fixture::new().await;
     let mut expected = Vec::new();
     for index in 0..45 {
+        let tags = match index % 3 {
+            0 => json!({"request.id": "lookup-request"}),
+            1 => json!([["request.id", "lookup-request"]]),
+            _ => json!([{"key": "request.id", "value": "lookup-request"}]),
+        };
         expected.push(
             f.insert(
                 f.project,
                 Some(f.issues[index % 2]),
                 json!({
-                    "user": {"id": "lookup-user"}, "tags": {"request.id": "lookup-request"},
+                    "user": {"id": "lookup-user"}, "tags": tags,
                     "private_payload": "not a summary",
                 }),
             )

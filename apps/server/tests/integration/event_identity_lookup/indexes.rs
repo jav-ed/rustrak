@@ -4,7 +4,7 @@ use sqlx::Row;
 use std::time::Instant;
 use uuid::Uuid;
 
-async fn drop_indexes(f: &Fixture) {
+pub(super) async fn drop_lookups(f: &Fixture) {
     #[cfg(feature = "sqlite")]
     let migrations = [include_str!(
         "../../../migrations/sqlite/20260930000000_event_identity_lookup.down.sql"
@@ -21,7 +21,7 @@ async fn drop_indexes(f: &Fixture) {
     }
 }
 
-async fn create_indexes(f: &Fixture) {
+pub(super) async fn create_lookups(f: &Fixture) {
     #[cfg(feature = "sqlite")]
     let migrations = [include_str!(
         "../../../migrations/sqlite/20260930000000_event_identity_lookup.up.sql"
@@ -41,7 +41,7 @@ async fn create_indexes(f: &Fixture) {
 #[actix_web::test]
 async fn historical_sdk_values_survive_index_creation_and_rollback() {
     let f = Fixture::new().await;
-    drop_indexes(&f).await;
+    drop_lookups(&f).await;
     let large = (0..10000).map(|n| format!("{n:08x}")).collect::<String>();
     for value in [
         json!(large),
@@ -60,7 +60,7 @@ async fn historical_sdk_values_survive_index_creation_and_rollback() {
         )
         .await;
     }
-    create_indexes(&f).await;
+    create_lookups(&f).await;
     #[cfg(feature = "postgres")]
     {
         let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_index WHERE indexrelid IN ('idx_events_project_user_identity'::regclass, 'idx_events_project_request_identity'::regclass) AND indisvalid")
@@ -68,14 +68,14 @@ async fn historical_sdk_values_survive_index_creation_and_rollback() {
         assert_eq!(valid, 2);
     }
     // Reversible migrations must not alter stored payloads, including unindexed IDs.
-    drop_indexes(&f).await;
+    drop_lookups(&f).await;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM events WHERE project_id = $1")
         .bind(f.project)
         .fetch_one(&f.db.pool)
         .await
         .unwrap();
     assert_eq!(count, 8);
-    create_indexes(&f).await;
+    create_lookups(&f).await;
 }
 
 #[actix_web::test]
@@ -94,29 +94,43 @@ async fn first_and_cursor_pages_use_identity_indexes_without_a_sort() {
         .execute(&f.db.pool)
         .await
         .unwrap();
+    sqlx::query("ANALYZE event_request_identities")
+        .execute(&f.db.pool)
+        .await
+        .unwrap();
     #[cfg(feature = "sqlite")]
     let selectors = [
         ("json_extract(data, '$.user.id')", "json_type(data, '$.user.id') = 'text' AND length(CAST(json_extract(data, '$.user.id') AS BLOB)) BETWEEN 1 AND 200", "idx_events_project_user_identity"),
-        (r#"json_extract(data, '$.tags."request.id"')"#, r#"json_type(data, '$.tags."request.id"') = 'text' AND length(CAST(json_extract(data, '$.tags."request.id"') AS BLOB)) BETWEEN 1 AND 200"#, "idx_events_project_request_identity"),
+        ("r.request_id", "length(CAST(r.request_id AS BLOB)) BETWEEN 1 AND 200", "idx_events_project_request_identity"),
     ];
     #[cfg(feature = "postgres")]
     let selectors = [
         ("(data #>> '{user,id}')", "jsonb_typeof(data #> '{user,id}') = 'string' AND octet_length(data #>> '{user,id}') BETWEEN 1 AND 200", "idx_events_project_user_identity"),
-        ("(data #>> '{tags,request.id}')", "jsonb_typeof(data #> '{tags,request.id}') = 'string' AND octet_length(data #>> '{tags,request.id}') BETWEEN 1 AND 200", "idx_events_project_request_identity"),
+        ("r.request_id", "octet_length(r.request_id) BETWEEN 1 AND 200", "idx_events_project_request_identity"),
     ];
     for (field, guard, index) in selectors {
+        let (source, project, timestamp_field, id) = if field == "r.request_id" {
+            (
+                "event_request_identities r JOIN events e ON e.id = r.event_id",
+                "r.project_id",
+                "r.timestamp",
+                "r.event_id",
+            )
+        } else {
+            ("events e", "e.project_id", "e.timestamp", "e.id")
+        };
         for with_cursor in [false, true] {
             #[cfg(feature = "sqlite")]
             let explain = "EXPLAIN QUERY PLAN";
             #[cfg(feature = "postgres")]
             let explain = "EXPLAIN (ANALYZE, BUFFERS)";
             let boundary = if with_cursor {
-                "AND (timestamp, id) < ($4, $5)"
+                format!("AND ({timestamp_field}, {id}) < ($4, $5)")
             } else {
-                ""
+                String::new()
             };
             // Match the HTTP projection: a narrow SELECT id can hide sort/read costs.
-            let sql = format!("{explain} SELECT id,event_id,issue_id,timestamp,calculated_type,calculated_value,level,platform,release,environment,event_type FROM events WHERE project_id=$1 AND {field}=$2 AND {guard} {boundary} ORDER BY timestamp DESC,id DESC LIMIT $3");
+            let sql = format!("{explain} SELECT e.id,e.event_id,e.issue_id,e.timestamp,e.calculated_type,e.calculated_value,e.level,e.platform,e.release,e.environment,e.event_type FROM {source} WHERE {project}=$1 AND {field}=$2 AND {guard} {boundary} ORDER BY {timestamp_field} DESC,{id} DESC LIMIT $3");
             let query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                 .bind(f.project)
                 .bind("identity-0")
@@ -148,13 +162,39 @@ async fn first_and_cursor_pages_use_identity_indexes_without_a_sort() {
             println!("{index}, cursor={with_cursor}: {plan}");
         }
     }
+    // Trigger extraction must restrict the view to the one written event.
+    // A full events scan here would make ingestion cost grow with retention.
+    #[cfg(feature = "sqlite")]
+    let (sql, column, primary_index) = (
+        "EXPLAIN QUERY PLAN SELECT * FROM event_request_identity_values WHERE event_id = $1",
+        "detail",
+        "sqlite_autoindex_events_1",
+    );
+    #[cfg(feature = "postgres")]
+    let (sql, column, primary_index) = (
+        "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM event_request_identity_values WHERE event_id = $1",
+        "QUERY PLAN",
+        "events_pkey",
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(Uuid::max())
+        .fetch_all(&f.db.pool)
+        .await
+        .unwrap();
+    let plan = rows
+        .iter()
+        .map(|row| row.get::<String, _>(column))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(plan.contains(primary_index), "{plan}");
+    println!("request tag extraction: {plan}");
 }
 
 #[actix_web::test]
 #[ignore = "Explicit synthetic write/storage measurement; no timing threshold in CI"]
 async fn synthetic_write_and_storage_cost() {
     let f = Fixture::new().await;
-    drop_indexes(&f).await;
+    drop_lookups(&f).await;
     let mut elapsed = Vec::new();
     let mut extra_bytes: i64 = 0;
     for indexed in [false, true] {
@@ -174,7 +214,7 @@ async fn synthetic_write_and_storage_cost() {
                 .fetch_one(&f.db.pool)
                 .await
                 .unwrap();
-            create_indexes(&f).await;
+            create_lookups(&f).await;
             #[cfg(feature = "sqlite")]
             {
                 let after: i64 = sqlx::query_scalar("PRAGMA page_count")
@@ -189,11 +229,11 @@ async fn synthetic_write_and_storage_cost() {
             }
             #[cfg(feature = "postgres")]
             {
-                extra_bytes = sqlx::query_scalar("SELECT pg_relation_size('idx_events_project_user_identity') + pg_relation_size('idx_events_project_request_identity')")
+                extra_bytes = sqlx::query_scalar("SELECT pg_relation_size('idx_events_project_user_identity') + pg_total_relation_size('event_request_identities')")
                     .fetch_one(&f.db.pool).await.unwrap();
             }
         }
     }
     assert!(extra_bytes > 0);
-    println!("Synthetic 5000-row batches: no lookup indexes={:.3}s, with indexes={:.3}s; index bytes after initial 5000 rows={extra_bytes}. Single ordered trial, not a production capacity claim.", elapsed[0], elapsed[1]);
+    println!("Synthetic 5000-row batches: without lookup storage={:.3}s, with lookup storage={:.3}s; lookup storage bytes after initial 5000 rows={extra_bytes}. Single ordered trial, not a production capacity claim.", elapsed[0], elapsed[1]);
 }

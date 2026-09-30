@@ -18,7 +18,7 @@ use crate::services::ProjectService;
 pub struct LookupQuery {
     /// Exact string from the event's user.id (1..200 UTF-8 bytes).
     pub user_id: Option<String>,
-    /// Exact string from the event's tags["request.id"] (1..200 UTF-8 bytes).
+    /// Exact request.id tag in object or array-form event tags (1..200 UTF-8 bytes).
     pub request_id: Option<String>,
     /// Opaque continuation returned by the preceding lookup page.
     pub cursor: Option<String>,
