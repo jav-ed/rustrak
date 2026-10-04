@@ -17,8 +17,8 @@ pub enum IssueLevel {
 
 impl IssueLevel {
     /// Ranks the level stored on an issue. An absent or unrecognized level is
-    /// Sentry's default, `error`, so an SDK-specific level can never cause an
-    /// alert to be withheld.
+    /// Sentry's default, `error`, so an SDK-specific level is admitted by every
+    /// threshold up to `error`; only a `fatal` threshold withholds it.
     pub fn of_issue(level: Option<&str>) -> Self {
         match level {
             Some("debug") => Self::Debug,
@@ -135,6 +135,14 @@ mod tests {
         assert!(conditions.admits(Some("fatal")));
         assert!(conditions.admits(None));
         assert!(conditions.admits(Some("critical")));
+    }
+
+    #[test]
+    fn a_fatal_minimum_withholds_a_missing_or_unrecognized_level() {
+        let conditions = AlertConditions::from_stored(&json!({"min_level": "fatal"}), 1);
+        assert!(conditions.admits(Some("fatal")));
+        assert!(!conditions.admits(None));
+        assert!(!conditions.admits(Some("critical")));
     }
 
     #[test]

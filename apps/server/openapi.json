@@ -8414,7 +8414,7 @@
           },
           "conditions": {
             "type": "object",
-            "description": "Optional filters. `min_level` (`debug`, `info`, `warning`, `error` or `fatal`) limits the\nrule to issues at or above that level; an empty object alerts on every issue."
+            "description": "Optional filters. `min_level` (`debug`, `info`, `warning`, `error` or `fatal`) limits the\nrule to issues at or above that level; an issue without a level, or with one Rustrak does\nnot recognize, counts as `error`. An empty object alerts on every issue."
           },
           "cooldown_minutes": {
             "type": "integer",
@@ -8830,7 +8830,7 @@
           },
           "conditions": {
             "type": "object",
-            "description": "Optional filters. `min_level` (`debug`, `info`, `warning`, `error` or `fatal`) limits the\nrule to issues at or above that level. Unknown condition names and levels are rejected."
+            "description": "Optional filters. `min_level` (`debug`, `info`, `warning`, `error` or `fatal`) limits the\nrule to issues at or above that level; an issue without a level, or with one Rustrak does\nnot recognize, counts as `error`. Unknown condition names and levels are rejected."
           },
           "cooldown_minutes": {
             "type": "integer",
@@ -10763,7 +10763,8 @@
             "type": [
               "object",
               "null"
-            ]
+            ],
+            "description": "Replaces the rule's filters. See `CreateAlertRule`: `min_level` is the one supported\ncondition, an issue without a recognized level counts as `error`, and unknown condition\nnames and levels are rejected."
           },
           "cooldown_minutes": {
             "type": [
