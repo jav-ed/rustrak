@@ -308,7 +308,8 @@ pub struct AlertRule {
 pub struct CreateAlertRule {
     pub name: String,
     pub alert_type: AlertType,
-    /// See [`AlertRule::conditions`]; unknown keys are rejected.
+    /// Optional filters. `min_level` (`debug`, `info`, `warning`, `error` or `fatal`) limits the
+    /// rule to issues at or above that level. Unknown condition names and levels are rejected.
     #[serde(default = "default_conditions")]
     #[cfg_attr(feature = "openapi", schema(value_type = Object))]
     pub conditions: serde_json::Value,

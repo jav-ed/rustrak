@@ -218,7 +218,7 @@ A rule can limit itself to issues at or above a level, so low-severity issues st
 { "conditions": { "min_level": "error" } }
 ```
 
-Levels from least to most severe are `debug`, `info`, `warning`, `error` and `fatal`. The level is the one of the event that created the issue. An issue without a level, or with a level Rustrak does not recognize, counts as `error`, as it does in Sentry, so it is never withheld by mistake. An empty `conditions` object alerts on every issue.
+Levels from least to most severe are `debug`, `info`, `warning`, `error` and `fatal`. The level is the one stored on the issue, which follows its most recent event. An issue without a level, or with a level Rustrak does not recognize, counts as `error`, as it does in Sentry, so it is never withheld by mistake. An empty `conditions` object alerts on every issue.
 
 An issue below the minimum level creates no alert history entry and does not start the rule's cooldown. The API rejects unknown condition names and unknown levels.
 

@@ -30,10 +30,9 @@ impl IssueLevel {
     }
 }
 
-/// The conditions an alert rule understands. Writes are validated strictly by
-/// [`AlertConditions::validate`]; reading is lenient (see
-/// [`AlertConditions::from_stored`]) because rules saved before conditions had
-/// any effect can hold arbitrary JSON.
+/// The conditions an alert rule understands. [`AlertConditions::validate`]
+/// guards every write; [`AlertConditions::from_stored`] reads what a rule
+/// saved before conditions had any effect, which can be arbitrary JSON.
 #[derive(Debug, Default, Deserialize)]
 pub struct AlertConditions {
     /// Only issues at this level or above send the alert. Absent or `null`:
@@ -43,34 +42,34 @@ pub struct AlertConditions {
 }
 
 impl AlertConditions {
-    fn invalid(message: impl Into<String>) -> AppError {
-        AppError::Validation(message.into()).with_field("conditions", FieldErrorCode::Invalid)
+    fn parse(value: &serde_json::Value) -> Result<Self, String> {
+        let Some(map) = value.as_object() else {
+            return Err("conditions must be a JSON object".to_string());
+        };
+        if let Some(key) = map.keys().find(|key| key.as_str() != "min_level") {
+            return Err(format!(
+                "unknown condition '{key}'; supported conditions: min_level"
+            ));
+        }
+        serde_json::from_value(value.clone())
+            .map_err(|_| "min_level must be one of debug, info, warning, error, fatal".to_string())
     }
 
     /// Rejects what a rule could never act on, so a typo such as `minlevel`
     /// cannot leave a rule silently unfiltered.
     pub fn validate(value: &serde_json::Value) -> AppResult<()> {
-        let Some(map) = value.as_object() else {
-            return Err(Self::invalid("conditions must be a JSON object"));
-        };
-        if let Some(key) = map.keys().find(|key| key.as_str() != "min_level") {
-            return Err(Self::invalid(format!(
-                "unknown condition '{key}'; supported conditions: min_level"
-            )));
-        }
-        serde_json::from_value::<Self>(value.clone()).map_err(|_| {
-            Self::invalid("min_level must be one of debug, info, warning, error, fatal")
-        })?;
-        Ok(())
+        Self::parse(value).map(|_| ()).map_err(|reason| {
+            AppError::Validation(reason).with_field("conditions", FieldErrorCode::Invalid)
+        })
     }
 
-    /// Reads the conditions saved on a rule. A stored value this version cannot
-    /// read is logged and treated as no condition: a rule written before
-    /// conditions had meaning must keep alerting, and failing to alert is worse
-    /// than alerting too often.
+    /// Reads the conditions saved on a rule. A stored value that would not pass
+    /// [`AlertConditions::validate`] today is logged and ignored as a whole, never
+    /// applied in part: a rule written before conditions had meaning must keep
+    /// alerting, and failing to alert is worse than alerting too often.
     pub fn from_stored(value: &serde_json::Value, rule_id: i32) -> Self {
-        serde_json::from_value(value.clone()).unwrap_or_else(|error| {
-            log::warn!("Alert rule {rule_id} has unreadable conditions, ignoring them: {error}");
+        Self::parse(value).unwrap_or_else(|reason| {
+            log::warn!("Alert rule {rule_id} has conditions this version cannot apply, ignoring them: {reason}");
             Self::default()
         })
     }
@@ -150,6 +149,10 @@ mod tests {
         let conditions = AlertConditions::from_stored(&json!({"min_level": "high"}), 1);
         assert!(conditions.admits(Some("debug")));
         let conditions = AlertConditions::from_stored(&json!("legacy"), 1);
+        assert!(conditions.admits(Some("debug")));
+        // A legacy object that mixes a supported key with an unknown one is ignored as a whole.
+        let conditions =
+            AlertConditions::from_stored(&json!({"min_level": "error", "min_events": 5}), 1);
         assert!(conditions.admits(Some("debug")));
     }
 }

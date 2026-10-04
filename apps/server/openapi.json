@@ -8413,7 +8413,8 @@
             "description": "All linked integrations including routing_override per channel."
           },
           "conditions": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional filters. `min_level` (`debug`, `info`, `warning`, `error` or `fatal`) limits the\nrule to issues at or above that level; an empty object alerts on every issue."
           },
           "cooldown_minutes": {
             "type": "integer",
@@ -8828,7 +8829,8 @@
             }
           },
           "conditions": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional filters. `min_level` (`debug`, `info`, `warning`, `error` or `fatal`) limits the\nrule to issues at or above that level. Unknown condition names and levels are rejected."
           },
           "cooldown_minutes": {
             "type": "integer",
